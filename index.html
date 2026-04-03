@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self';">
+<title>Simple Elite</title>
+<link rel="stylesheet" href="node_modules/xterm/css/xterm.css">
+
+<style>
+body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
+
+.left { flex:1; }
+.left webview { width:100%; height:100%; }
+
+.right {
+  flex:1;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+}
+
+.top { flex:1; display:flex; flex-direction:column; min-height:0; }
+.ai-controls { padding:10px; border-bottom:1px solid #333; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.ai-controls select, .ai-controls input { background:#111; color:#eee; border:1px solid #333; padding:6px 8px; border-radius:6px; }
+.ai-controls button { background:#222; color:#eee; border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer; }
+.ai-controls button.active { background:#6d28d9; border-color:#6d28d9; }
+.ai-controls button:disabled { opacity:0.5; cursor:not-allowed; }
+.messages { flex:1; padding:10px; overflow:auto; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#0b0b0b; color:#e5e5e5; }
+.msg { padding:8px 10px; border:1px solid #222; border-radius:10px; margin-bottom:8px; white-space:pre-wrap; word-break:break-word; background:#0f0f0f; }
+.msg.user { border-color:#10a37f55; }
+.msg.assistant { border-color:#a855f755; }
+.msg.system { border-color:#666; color:#aaa; }
+.composer { padding:10px; border-top:1px solid #333; display:flex; gap:8px; }
+.composer input { flex:1; background:#111; color:#eee; border:1px solid #333; padding:10px; border-radius:10px; }
+.composer button { background:#10a37f; border:1px solid #10a37f; color:#fff; padding:10px 14px; border-radius:10px; cursor:pointer; }
+.history { padding:8px 10px; border-top:1px solid #333; border-bottom:1px solid #333; display:flex; gap:8px; align-items:center; justify-content:space-between; color:#aaa; font-size:12px; }
+.history button { background:transparent; color:#aaa; border:1px solid #333; padding:6px 10px; border-radius:10px; cursor:pointer; }
+.history button:disabled { opacity:0.5; cursor:not-allowed; }
+.meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.resizer {
+  height:6px;
+  background:#444;
+  cursor:row-resize;
+}
+
+.terminal {
+  height:200px;
+  background:black;
+}
+</style>
+</head>
+
+<body>
+
+<div class="left">
+  <webview src="https://chatgpt.com" style="width:100%; height:100%; display:inline-flex;"></webview>
+</div>
+
+<div class="right">
+
+  <div class="top">
+    <div class="ai-controls">
+      <strong style="color:#eee; margin-right:6px;">AI Assistant</strong>
+      <select id="aiProvider">
+        <option value="codex">Codex</option>
+        <option value="opencode">OpenCode</option>
+      </select>
+      <select id="aiConversation" style="min-width:160px;"></select>
+      <button id="aiLoadBtn" type="button">Load</button>
+      <button id="aiNewBtn" type="button" title="Create a new Codex thread">New</button>
+      <button id="aiManualBtn" type="button" class="active">Manual</button>
+      <button id="aiAutoBtn" type="button">Auto</button>
+    </div>
+    <div class="history">
+      <button id="aiLoadMoreBtn" type="button" disabled>Load more</button>
+      <div class="meta" id="aiHistoryMeta">Not loaded</div>
+    </div>
+    <div class="messages" id="aiMessages">
+      <div class="msg system">Select a provider + conversation, then click Load.</div>
+    </div>
+    <div class="composer">
+      <input id="aiInput" type="text" placeholder="Type a message…" />
+      <button id="aiSendBtn" type="button">Send</button>
+    </div>
+  </div>
+
+  <div class="resizer" id="resizer"></div>
+
+  <div id="terminal" class="terminal"></div>
+
+</div>
+
+<script src="node_modules/xterm/lib/xterm.js"></script>
+
+<script>
+const term = new Terminal({
+  theme: { background: '#000000' }
+});
+
+term.open(document.getElementById('terminal'));
+
+// send input to backend
+term.onData(data => { console.log("INPUT:", data);
+  window.terminal.sendInput(data);
+});
+
+// receive output from backend
+window.terminal.onData((data) => {
+  term.write(data);
+});
+
+// resize logic
+const resizer = document.getElementById('resizer');
+const terminalEl = document.getElementById('terminal');
+
+let isDragging = false;
+
+resizer.addEventListener('mousedown', () => {
+  isDragging = true;
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  terminalEl.style.height = (window.innerHeight - e.clientY) + 'px';
+});
+
+document.addEventListener('mouseup', () => {
+  isDragging = false;
+});
+
+// ---- AI Assistant (Hybrid Hub right side behavior, via IPC) ----
+let aiProvider = 'codex';
+let aiConversationId = null;
+let aiMode = 'manual';
+let aiNextBefore = null;
+
+const providerSel = document.getElementById('aiProvider');
+const convoSel = document.getElementById('aiConversation');
+const loadBtn = document.getElementById('aiLoadBtn');
+const newBtn = document.getElementById('aiNewBtn');
+const manualBtn = document.getElementById('aiManualBtn');
+const autoBtn = document.getElementById('aiAutoBtn');
+const loadMoreBtn = document.getElementById('aiLoadMoreBtn');
+const historyMeta = document.getElementById('aiHistoryMeta');
+const messagesEl = document.getElementById('aiMessages');
+const inputEl = document.getElementById('aiInput');
+const sendBtn = document.getElementById('aiSendBtn');
+
+function _truncateWords(text, maxWords = 25) {
+  const t = (text ?? '').toString().trim();
+  if (!t) return '';
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return t;
+  return words.slice(0, maxWords).join(' ') + '…';
+}
+
+function _clearMessages() {
+  messagesEl.innerHTML = '';
+}
+function _addMessage(text, role) {
+  const div = document.createElement('div');
+  div.className = `msg ${role || 'system'}`;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+function _setHistoryMeta(text) {
+  historyMeta.textContent = text;
+}
+function _setLoadMoreEnabled(enabled) {
+  loadMoreBtn.disabled = !enabled;
+}
+
+function _setMode(mode) {
+  aiMode = (mode === 'auto') ? 'auto' : 'manual';
+  manualBtn.classList.toggle('active', aiMode === 'manual');
+  autoBtn.classList.toggle('active', aiMode === 'auto');
+}
+
+async function refreshConversationList() {
+  convoSel.innerHTML = '';
+  aiConversationId = null;
+  aiNextBefore = null;
+  _setLoadMoreEnabled(false);
+  _setHistoryMeta('Not loaded');
+
+  try {
+    if (aiProvider === 'codex') {
+      const res = await window.aiAssistant.codex.listThreads({ limit: 50 });
+      const threads = res?.threads || [];
+      for (const t of threads) {
+        const full = (t.title || t.id || '').toString();
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = _truncateWords(full, 25) || t.id;
+        opt.title = full;
+        convoSel.appendChild(opt);
+      }
+    } else {
+      const res = await window.aiAssistant.opencode.listSessions({ limit: 50 });
+      const sessions = res?.sessions || [];
+      for (const s of sessions) {
+        const full = (s.title || s.directory || s.id || '').toString();
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = _truncateWords(full, 25) || s.id;
+        opt.title = full;
+        convoSel.appendChild(opt);
+      }
+    }
+  } catch (e) {
+    _clearMessages();
+    _addMessage(`Failed to load conversations: ${e}`, 'system');
+  }
+
+  if (convoSel.options.length) {
+    convoSel.selectedIndex = 0;
+    aiConversationId = convoSel.value;
+    loadBtn.disabled = false;
+  }
+  else {
+    loadBtn.disabled = true;
+  }
+}
+
+async function loadConversation({ more = false } = {}) {
+  const selected = convoSel.value;
+  if (!selected) {
+    _addMessage('Select a conversation first.', 'system');
+    return;
+  }
+  aiConversationId = selected;
+
+  const limit = 15;
+  const before = more ? aiNextBefore : null;
+
+  try {
+    let data;
+    if (aiProvider === 'codex') {
+      data = await window.aiAssistant.codex.getMessages({ threadId: aiConversationId, limit, before });
+    } else {
+      data = await window.aiAssistant.opencode.getMessages({ sessionId: aiConversationId, limit, before });
+    }
+
+    const msgs = data?.messages || [];
+    const nextBefore = data?.next_before ?? null;
+
+    if (!more) _clearMessages();
+    if (!msgs.length && !more) _addMessage('No messages found.', 'system');
+
+    for (const m of msgs) {
+      const role = (m.role === 'user') ? 'user' : (m.role === 'assistant' ? 'assistant' : 'system');
+      _addMessage(m.text || '', role);
+    }
+
+    aiNextBefore = nextBefore;
+    _setLoadMoreEnabled(Boolean(aiNextBefore));
+    _setHistoryMeta(`Loaded ${msgs.length} message(s)`);
+  } catch (e) {
+    _addMessage(`Load error: ${e}`, 'system');
+  }
+}
+
+async function sendMessage() {
+  const text = (inputEl.value || '').trim();
+  if (!text) return;
+  if (!aiConversationId) {
+    _addMessage('Select and load a conversation first.', 'system');
+    return;
+  }
+  _addMessage(text, 'user');
+  inputEl.value = '';
+  try {
+    let res;
+    if (aiProvider === 'codex') {
+      res = await window.aiAssistant.codex.send({ threadId: aiConversationId, prompt: text, mode: aiMode });
+    } else {
+      res = await window.aiAssistant.opencode.send({ sessionId: aiConversationId, prompt: text });
+    }
+    if (res?.error) {
+      _addMessage(res.error, 'system');
+      return;
+    }
+    _addMessage(res?.response || '', 'assistant');
+  } catch (e) {
+    _addMessage(`Send error: ${e}`, 'system');
+  }
+}
+
+async function newCodexChat() {
+  if (aiProvider !== 'codex') {
+    _addMessage('Switch provider to Codex to create a new chat.', 'system');
+    return;
+  }
+  try {
+    const res = await window.aiAssistant.codex.newThread({ cwd: '', title: 'New chat', mode: aiMode });
+    if (res?.error) {
+      _addMessage(res.error, 'system');
+      return;
+    }
+    await refreshConversationList();
+    if (res?.id) {
+      convoSel.value = res.id;
+      aiConversationId = res.id;
+      await loadConversation({ more: false });
+    }
+  } catch (e) {
+    _addMessage(`New chat error: ${e}`, 'system');
+  }
+}
+
+providerSel.addEventListener('change', async () => {
+  aiProvider = providerSel.value;
+  const isCodex = aiProvider === 'codex';
+  newBtn.style.display = isCodex ? 'inline-block' : 'none';
+  manualBtn.style.display = isCodex ? 'inline-block' : 'none';
+  autoBtn.style.display = isCodex ? 'inline-block' : 'none';
+  await refreshConversationList();
+});
+convoSel.addEventListener('change', () => {
+  aiConversationId = convoSel.value;
+  aiNextBefore = null;
+  _setLoadMoreEnabled(false);
+  _setHistoryMeta('Not loaded');
+});
+loadBtn.addEventListener('click', () => loadConversation({ more: false }));
+loadMoreBtn.addEventListener('click', () => loadConversation({ more: true }));
+manualBtn.addEventListener('click', () => _setMode('manual'));
+autoBtn.addEventListener('click', () => _setMode('auto'));
+newBtn.addEventListener('click', () => newCodexChat());
+sendBtn.addEventListener('click', () => sendMessage());
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+// init
+(async () => {
+  aiProvider = providerSel.value;
+  _setMode('manual');
+  newBtn.style.display = 'inline-block';
+  manualBtn.style.display = 'inline-block';
+  autoBtn.style.display = 'inline-block';
+  await refreshConversationList();
+})();
+</script>
+
+</body>
+</html>

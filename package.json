@@ -1,0 +1,23 @@
+{
+  "name": "simple-elite",
+  "version": "1.0.0",
+  "description": "Simple Elite: dual-panel Electron app with ChatGPT webview + Codex/OpenCode assistant panel + terminal.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Allan Odora",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "xterm": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^41.1.0",
+    "electron-rebuild": "^3.2.9",
+    "node-abi": "^3.65.0"
+  }
+}
