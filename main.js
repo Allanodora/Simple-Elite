@@ -123,6 +123,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: "Simple Elite",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
@@ -132,6 +133,7 @@ function createWindow() {
   });
 
   win.loadFile("index.html");
+  win.setTitle("Simple Elite");
 
   win.webContents.on("did-finish-load", () => {
     shell = pty.spawn("/bin/zsh", ["-i"], {

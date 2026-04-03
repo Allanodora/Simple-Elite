@@ -1,5 +1,6 @@
 {
   "name": "simple-elite",
+  "productName": "Simple Elite",
   "version": "1.0.0",
   "description": "Simple Elite: dual-panel Electron app with ChatGPT webview + Codex/OpenCode assistant panel + terminal.",
   "main": "main.js",
