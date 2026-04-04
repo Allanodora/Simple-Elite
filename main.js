@@ -503,6 +503,15 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
 });
 
 let _opencodeServerProc = null;
+async function _isOpenCodeServerUp() {
+  const base = "http://127.0.0.1:9090/";
+  try {
+    const r = await fetch(base, { method: "GET" });
+    return r.status === 200;
+  } catch {
+    return false;
+  }
+}
 async function _ensureOpenCodeServerRunning() {
   const base = "http://127.0.0.1:9090/";
   try {
@@ -536,6 +545,12 @@ async function _ensureOpenCodeServerRunning() {
   }
   return false;
 }
+
+ipcMain.handle("opencode:ensureServer", async () => {
+  const ok = await _ensureOpenCodeServerRunning();
+  if (!ok) return { error: "Could not start OpenCode server" };
+  return { ok: true, url: "http://127.0.0.1:9090/" };
+});
 
 ipcMain.handle("opencode:send", async (_evt, args) => {
   const sessionId = (args?.sessionId || "").toString();
@@ -653,3 +668,14 @@ ipcMain.handle("opencode:newSession", async (_evt, args) => {
 });
 
 app.whenReady().then(createWindow);
+
+app.on("before-quit", async () => {
+  // Best-effort cleanup of a detached opencode server we started.
+  try {
+    if (_opencodeServerProc && !_opencodeServerProc.killed) {
+      _opencodeServerProc.kill();
+    }
+  } catch {
+    // ignore
+  }
+});
