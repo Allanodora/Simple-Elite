@@ -22,5 +22,6 @@ contextBridge.exposeInMainWorld("aiAssistant", {
     listSessions: (args) => ipcRenderer.invoke("opencode:listSessions", args),
     getMessages: (args) => ipcRenderer.invoke("opencode:getMessages", args),
     send: (args) => ipcRenderer.invoke("opencode:send", args),
+    newSession: (args) => ipcRenderer.invoke("opencode:newSession", args),
   },
 });

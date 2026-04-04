@@ -504,4 +504,46 @@ ipcMain.handle("opencode:send", async (_evt, args) => {
   }
 });
 
+ipcMain.handle("opencode:newSession", async (_evt, args) => {
+  const title = (args?.title || "").toString().trim() || "New chat";
+  const dir = (args?.dir || "").toString().trim() || os.homedir();
+
+  // Create a new session by running a minimal prompt (no --continue / --session).
+  // Then query the DB for the newest session and return its id.
+  try {
+    await _runCmdCapture(
+      [
+        "opencode",
+        "run",
+        "--format",
+        "json",
+        "--title",
+        title,
+        "--dir",
+        dir,
+        "ready",
+      ],
+      { input: "ready" }
+    );
+  } catch (e) {
+    return { error: `Failed to start OpenCode: ${e}` };
+  }
+
+  const dbPath = _openCodeDbPath();
+  if (!fs.existsSync(dbPath)) return { error: "OpenCode DB not found" };
+  try {
+    const rows = await _sqliteAllJson(
+      dbPath,
+      `SELECT id, title, directory, time_updated
+       FROM session
+       ORDER BY time_updated DESC
+       LIMIT 1`
+    );
+    if (!rows[0]?.id) return { error: "Created session, but could not find it" };
+    return { id: rows[0].id, title: rows[0].title || title };
+  } catch (e) {
+    return { error: `Failed to read OpenCode DB: ${e}` };
+  }
+});
+
 app.whenReady().then(createWindow);

@@ -9,8 +9,12 @@
 <style>
 body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
 
-.left { flex:1; }
-.left webview { width:100%; height:100%; }
+.left { flex:1; display:flex; flex-direction:column; min-width:0; }
+.leftbar { padding:8px 10px; border-bottom:1px solid #222; display:flex; gap:8px; align-items:center; background:#0b0b0b; flex:0 0 auto; }
+.leftbar select { background:#111; color:#eee; border:1px solid #333; padding:6px 8px; border-radius:8px; }
+.leftbar .hint { color:#aaa; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.leftview { flex:1; min-height:0; }
+.leftview webview { width:100%; height:100%; display:inline-flex; }
 
 .right {
   flex:1;
@@ -54,7 +58,16 @@ body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
 <body>
 
 <div class="left">
-  <webview src="https://chatgpt.com" style="width:100%; height:100%; display:inline-flex;"></webview>
+  <div class="leftbar">
+    <strong style="color:#eee;">Online</strong>
+    <select id="leftProvider">
+      <option value="chatgpt">ChatGPT</option>
+      <option value="claude">Claude</option>
+      <option value="gemini">Gemini</option>
+    </select>
+    <div class="hint" id="leftHint"></div>
+  </div>
+  <div class="leftview" id="leftWebviewWrap"></div>
 </div>
 
 <div class="right">
@@ -310,10 +323,34 @@ async function newCodexChat() {
   }
 }
 
+async function newOpenCodeChat() {
+  if (aiProvider !== 'opencode') {
+    _addMessage('Switch provider to OpenCode to create a new chat.', 'system');
+    return;
+  }
+  _addMessage('Creating new OpenCode session…', 'system');
+  try {
+    const res = await window.aiAssistant.opencode.newSession({ title: 'New chat', dir: '' });
+    if (res?.error) {
+      _addMessage(res.error, 'system');
+      return;
+    }
+    await refreshConversationList();
+    if (res?.id) {
+      convoSel.value = res.id;
+      aiConversationId = res.id;
+      await loadConversation({ more: false });
+    }
+  } catch (e) {
+    _addMessage(`New chat error: ${e}`, 'system');
+  }
+}
+
 providerSel.addEventListener('change', async () => {
   aiProvider = providerSel.value;
   const isCodex = aiProvider === 'codex';
-  newBtn.style.display = isCodex ? 'inline-block' : 'none';
+  newBtn.style.display = 'inline-block';
+  newBtn.textContent = 'New';
   manualBtn.style.display = isCodex ? 'inline-block' : 'none';
   autoBtn.style.display = isCodex ? 'inline-block' : 'none';
   await refreshConversationList();
@@ -328,7 +365,10 @@ loadBtn.addEventListener('click', () => loadConversation({ more: false }));
 loadMoreBtn.addEventListener('click', () => loadConversation({ more: true }));
 manualBtn.addEventListener('click', () => _setMode('manual'));
 autoBtn.addEventListener('click', () => _setMode('auto'));
-newBtn.addEventListener('click', () => newCodexChat());
+newBtn.addEventListener('click', () => {
+  if (aiProvider === 'codex') return newCodexChat();
+  return newOpenCodeChat();
+});
 sendBtn.addEventListener('click', () => sendMessage());
 inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 
@@ -340,6 +380,51 @@ inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(
   manualBtn.style.display = 'inline-block';
   autoBtn.style.display = 'inline-block';
   await refreshConversationList();
+})();
+
+// ---- Left Online Provider (ChatGPT/Claude/Gemini) ----
+const leftProviderSel = document.getElementById('leftProvider');
+const leftWrap = document.getElementById('leftWebviewWrap');
+const leftHint = document.getElementById('leftHint');
+
+const LEFT_PROVIDERS = {
+  chatgpt: { label: 'ChatGPT', url: 'https://chatgpt.com', partition: 'persist:online-chatgpt' },
+  claude: { label: 'Claude', url: 'https://claude.ai', partition: 'persist:online-claude' },
+  gemini: { label: 'Gemini', url: 'https://gemini.google.com', partition: 'persist:online-gemini' },
+};
+
+function _setLeftHint(text) {
+  leftHint.textContent = (text ?? '').toString();
+}
+
+function _mountLeftWebview(key) {
+  const cfg = LEFT_PROVIDERS[key] || LEFT_PROVIDERS.chatgpt;
+  // Partition changes require a new <webview>, so rebuild each switch.
+  leftWrap.innerHTML = '';
+  const wv = document.createElement('webview');
+  wv.setAttribute('src', cfg.url);
+  wv.setAttribute('partition', cfg.partition);
+  wv.style.width = '100%';
+  wv.style.height = '100%';
+  wv.style.display = 'inline-flex';
+  leftWrap.appendChild(wv);
+  _setLeftHint(cfg.url);
+}
+
+leftProviderSel.addEventListener('change', () => {
+  const key = leftProviderSel.value;
+  try { localStorage.setItem('simpleElite.leftProvider', key); } catch {}
+  _mountLeftWebview(key);
+});
+
+(() => {
+  let key = 'chatgpt';
+  try {
+    const saved = localStorage.getItem('simpleElite.leftProvider');
+    if (saved && LEFT_PROVIDERS[saved]) key = saved;
+  } catch {}
+  leftProviderSel.value = key;
+  _mountLeftWebview(key);
 })();
 </script>
 
