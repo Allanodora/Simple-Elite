@@ -484,23 +484,70 @@ ipcMain.handle("opencode:send", async (_evt, args) => {
   if (!sessionId) return { error: "Missing sessionId" };
   if (!prompt) return { error: "Empty prompt" };
 
-  const ok = await _ensureOpenCodeServerRunning();
-  if (!ok) return { error: "Could not start OpenCode server" };
+  const dbPath = _openCodeDbPath();
+  if (!fs.existsSync(dbPath)) return { error: "OpenCode DB not found" };
 
   try {
-    const r = await fetch(`http://127.0.0.1:9090/sessions/${sessionId}/continue`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: prompt }),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      return { error: `OpenCode error: ${r.status} - ${t.slice(0, 500)}` };
+    // Get session directory (best-effort) and the latest message timestamp before sending.
+    const sessRows = await _sqliteAllJson(
+      dbPath,
+      `SELECT id, directory
+       FROM session
+       WHERE id = ${_sqlQuote(sessionId)}
+       LIMIT 1`
+    );
+    const sessionDir = (sessRows[0]?.directory || "").toString().trim();
+
+    const beforeRows = await _sqliteAllJson(
+      dbPath,
+      `SELECT MAX(time_created) AS t
+       FROM message
+       WHERE session_id = ${_sqlQuote(sessionId)}`
+    );
+    const beforeT = Number(beforeRows[0]?.t || 0) || 0;
+
+    const cmd = [
+      "opencode",
+      "run",
+      "--format",
+      "json",
+      "--session",
+      sessionId,
+    ];
+    if (sessionDir) cmd.push("--dir", sessionDir);
+
+    const result = await _runCmdCapture([...cmd, prompt], { input: prompt });
+    if (result.code !== 0) {
+      const msg = (result.stderr || result.stdout || `opencode exited ${result.code}`)
+        .toString()
+        .trim();
+      return { error: msg.slice(0, 4000) };
     }
-    const data = await r.json();
-    return { response: (data?.response || "").toString().slice(0, 16000) };
+
+    // Pull newest assistant message after run.
+    const msgRows = await _sqliteAllJson(
+      dbPath,
+      `SELECT time_created, data
+       FROM message
+       WHERE session_id = ${_sqlQuote(sessionId)} AND time_created > ${beforeT}
+       ORDER BY time_created DESC
+       LIMIT 50`
+    );
+    for (const r of msgRows) {
+      try {
+        const data = JSON.parse(r.data);
+        if (data?.role === "assistant") {
+          const text = (_opencodeExtractMessageText(data) || "").toString();
+          if (text) return { response: text.slice(0, 16000) };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return { response: "OpenCode ran, but no new assistant message was detected." };
   } catch (e) {
-    return { error: `Failed to connect to OpenCode: ${e}` };
+    return { error: `Failed to run OpenCode: ${e}` };
   }
 });
 
