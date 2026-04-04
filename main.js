@@ -397,6 +397,7 @@ ipcMain.handle("opencode:listSessions", async (_evt, args) => {
 function _opencodeExtractMessageText(data) {
   if (typeof data?.content === "string") return data.content;
   if (typeof data?.text === "string") return data.text;
+  if (typeof data?.message === "string") return data.message;
   if (Array.isArray(data?.parts)) return _extractTextFromContent(data.parts);
   if (typeof data === "string") return data;
   try {
@@ -404,6 +405,13 @@ function _opencodeExtractMessageText(data) {
   } catch {
     return "";
   }
+}
+
+function _opencodeExtractPartText(partData) {
+  if (!partData || typeof partData !== "object") return "";
+  if (typeof partData.text === "string") return partData.text;
+  if (typeof partData.content === "string") return partData.content;
+  return "";
 }
 
 ipcMain.handle("opencode:getMessages", async (_evt, args) => {
@@ -425,6 +433,48 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
 
   let nextBefore = null;
   if (rows.length) nextBefore = rows[rows.length - 1].time_created;
+
+  // Fetch parts for these messages (user content is stored in `part` rows).
+  const messageIds = [];
+  // Pull message ids for this page (stable mapping by time_created).
+  const idRows = await _sqliteAllJson(
+    dbPath,
+    `SELECT id, time_created
+     FROM message
+     WHERE session_id = ${_sqlQuote(sessionId)}${beforeClause}
+     ORDER BY time_created DESC
+     LIMIT ${limit}`
+  );
+  const idByTime = new Map();
+  for (const r of idRows) {
+    idByTime.set(Number(r.time_created), r.id);
+    messageIds.push(r.id);
+  }
+
+  const partTextByMessageId = new Map();
+  if (messageIds.length) {
+    const inList = messageIds.map((id) => _sqlQuote(id)).join(", ");
+    const partRows = await _sqliteAllJson(
+      dbPath,
+      `SELECT message_id, data
+       FROM part
+       WHERE session_id = ${_sqlQuote(sessionId)} AND message_id IN (${inList})
+       ORDER BY time_created ASC`
+    );
+    for (const pr of partRows) {
+      let partObj;
+      try {
+        partObj = JSON.parse(pr.data);
+      } catch {
+        continue;
+      }
+      const t = _opencodeExtractPartText(partObj);
+      if (!t) continue;
+      const prev = partTextByMessageId.get(pr.message_id) || "";
+      partTextByMessageId.set(pr.message_id, prev ? `${prev}\n${t}` : t);
+    }
+  }
+
   const msgs = [];
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i];
@@ -436,7 +486,16 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
     }
     let role = data?.role;
     if (role !== "user" && role !== "assistant" && role !== "system") role = "system";
-    const text = (_opencodeExtractMessageText(data) || "").toString();
+    const msgId = idByTime.get(Number(r.time_created));
+    let text = "";
+    if (msgId && partTextByMessageId.has(msgId)) {
+      text = partTextByMessageId.get(msgId);
+    } else {
+      text = (_opencodeExtractMessageText(data) || "").toString();
+    }
+    if (!text && role === "assistant") {
+      text = "[assistant message has no text output]";
+    }
     if (!text) continue;
     msgs.push({ role, text, ts: r.time_created });
   }
