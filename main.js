@@ -540,7 +540,8 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
       text = (_opencodeExtractMessageText(data) || "").toString();
     }
     if (!text && role === "assistant") {
-      text = "[assistant message has no text output]";
+      text =
+        "OpenCode responded but no text was saved for this message. Use Right → OpenCode Web.";
     }
     if (!text) continue;
     msgs.push({ role, text, ts: r.time_created });
@@ -670,7 +671,10 @@ ipcMain.handle("opencode:send", async (_evt, args) => {
       }
     }
 
-    return { response: "OpenCode ran, but no new assistant message was detected." };
+    return {
+      response:
+        "OpenCode responded but no new text message was detected. Use Right → OpenCode Web.",
+    };
   } catch (e) {
     return { error: `Failed to run OpenCode: ${e}` };
   }

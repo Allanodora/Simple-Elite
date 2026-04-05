@@ -357,6 +357,7 @@ async function sendMessage() {
     if (aiProvider === 'codex') {
       res = await window.aiAssistant.codex.send({ threadId: aiConversationId, prompt: text, mode: aiMode });
     } else {
+      _addMessage('Pinging OpenCode…', 'system');
       res = await window.aiAssistant.opencode.send({ sessionId: aiConversationId, prompt: text });
     }
     if (res?.error) {
