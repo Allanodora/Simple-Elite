@@ -6,6 +6,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,7 +20,25 @@
   },
   "devDependencies": {
     "electron": "^41.1.0",
+    "electron-builder": "^26.0.12",
     "electron-rebuild": "^3.2.9",
     "node-abi": "^3.65.0"
+  },
+  "build": {
+    "appId": "com.allanodora.simpleelite",
+    "productName": "Simple Elite",
+    "files": [
+      "index.html",
+      "main.js",
+      "preload.js",
+      "panel.html",
+      "node_modules/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ]
+    }
   }
 }
