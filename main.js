@@ -422,38 +422,24 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
 
   const dbPath = _openCodeDbPath();
   if (!fs.existsSync(dbPath)) return { messages: [], next_before: null };
-  const beforeClause =
-    before !== null ? ` AND time_created < ${Number(before) || 0}` : "";
-  const sql = `SELECT time_created, data
-               FROM message
-               WHERE session_id = ${_sqlQuote(sessionId)}${beforeClause}
-               ORDER BY time_created DESC
-               LIMIT ${limit}`;
-  const rows = await _sqliteAllJson(dbPath, sql);
+	  const beforeClause =
+	    before !== null ? ` AND time_created < ${Number(before) || 0}` : "";
+	  const sql = `SELECT id, time_created, data
+	               FROM message
+	               WHERE session_id = ${_sqlQuote(sessionId)}${beforeClause}
+	               ORDER BY time_created DESC
+	               LIMIT ${limit}`;
+	  const rows = await _sqliteAllJson(dbPath, sql);
 
-  let nextBefore = null;
-  if (rows.length) nextBefore = rows[rows.length - 1].time_created;
+	  let nextBefore = null;
+	  if (rows.length) nextBefore = rows[rows.length - 1].time_created;
 
-  // Fetch parts for these messages (user content is stored in `part` rows).
-  const messageIds = [];
-  // Pull message ids for this page (stable mapping by time_created).
-  const idRows = await _sqliteAllJson(
-    dbPath,
-    `SELECT id, time_created
-     FROM message
-     WHERE session_id = ${_sqlQuote(sessionId)}${beforeClause}
-     ORDER BY time_created DESC
-     LIMIT ${limit}`
-  );
-  const idByTime = new Map();
-  for (const r of idRows) {
-    idByTime.set(Number(r.time_created), r.id);
-    messageIds.push(r.id);
-  }
+	  // Fetch parts for these messages (user content is stored in `part` rows).
+	  const messageIds = rows.map((r) => r.id).filter(Boolean);
 
-  const partTextByMessageId = new Map();
-  if (messageIds.length) {
-    const inList = messageIds.map((id) => _sqlQuote(id)).join(", ");
+	  const partTextByMessageId = new Map();
+	  if (messageIds.length) {
+	    const inList = messageIds.map((id) => _sqlQuote(id)).join(", ");
     const partRows = await _sqliteAllJson(
       dbPath,
       `SELECT message_id, data
@@ -476,21 +462,21 @@ ipcMain.handle("opencode:getMessages", async (_evt, args) => {
   }
 
   const msgs = [];
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i];
-    let data;
-    try {
-      data = JSON.parse(r.data);
-    } catch {
-      continue;
-    }
-    let role = data?.role;
-    if (role !== "user" && role !== "assistant" && role !== "system") role = "system";
-    const msgId = idByTime.get(Number(r.time_created));
-    let text = "";
-    if (msgId && partTextByMessageId.has(msgId)) {
-      text = partTextByMessageId.get(msgId);
-    } else {
+	  for (let i = rows.length - 1; i >= 0; i--) {
+	    const r = rows[i];
+	    let data;
+	    try {
+	      data = JSON.parse(r.data);
+	    } catch {
+	      continue;
+	    }
+	    let role = data?.role;
+	    if (role !== "user" && role !== "assistant" && role !== "system") role = "system";
+	    const msgId = r.id;
+	    let text = "";
+	    if (msgId && partTextByMessageId.has(msgId)) {
+	      text = partTextByMessageId.get(msgId);
+	    } else {
       text = (_opencodeExtractMessageText(data) || "").toString();
     }
     if (!text && role === "assistant") {
