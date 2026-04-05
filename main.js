@@ -462,11 +462,9 @@ function _opencodeExtractMessageText(data) {
   if (typeof data?.message === "string") return data.message;
   if (Array.isArray(data?.parts)) return _extractTextFromContent(data.parts);
   if (typeof data === "string") return data;
-  try {
-    return JSON.stringify(data).slice(0, 2000);
-  } catch {
-    return "";
-  }
+  // Avoid dumping large metadata blobs (models/tokens/etc.) into the UI.
+  if (data && typeof data === "object" && typeof data.error === "string") return data.error;
+  return "";
 }
 
 function _opencodeExtractPartText(partData) {
