@@ -3,6 +3,7 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { constants: FS_CONSTANTS } = require("fs");
 
 const pty = require("node-pty");
 
@@ -15,19 +16,70 @@ function _homePath(...parts) {
 
 app.setName("Simple Elite");
 
+function _unique(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const v of arr) {
+    const s = String(v || "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function _pathDirs() {
+  const envPath = (process.env.PATH || "").split(path.delimiter);
+  const common = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    _homePath(".local", "bin"),
+  ];
+  return _unique([...envPath, ...common]);
+}
+
+function _findExecutable(commandName) {
+  const name = (commandName || "").toString().trim();
+  if (!name) return null;
+  if (name.includes("/") && fs.existsSync(name)) return name;
+
+  for (const dir of _pathDirs()) {
+    const full = path.join(dir, name);
+    try {
+      fs.accessSync(full, FS_CONSTANTS.X_OK);
+      return full;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+const _binCache = new Map(); // name -> resolved path | null
+function _bin(name) {
+  if (_binCache.has(name)) return _binCache.get(name);
+  const resolved = _findExecutable(name);
+  _binCache.set(name, resolved);
+  return resolved;
+}
+
 function _sqlQuote(text) {
   return `'${String(text ?? "").replaceAll("'", "''")}'`;
 }
 
 async function _sqliteAllJson(dbPath, sql) {
   return await new Promise((resolve, reject) => {
-    const child = spawn("sqlite3", ["-readonly", "-json", dbPath, sql], {
+    const sqlite3Path = _bin("sqlite3") || "/usr/bin/sqlite3";
+    const child = spawn(sqlite3Path, ["-readonly", "-json", dbPath, sql], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", (e) => reject(e));
     child.on("close", (code) => {
       if (code !== 0) {
         reject(new Error((stderr || stdout || `sqlite3 exited ${code}`).trim()));
@@ -202,6 +254,9 @@ function _runCmdCapture(cmd, { input, ...opts } = {}) {
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", (e) =>
+      resolve({ code: 1, stdout, stderr: `${stderr}\n${String(e)}`.trim() })
+    );
     child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
 
     if (typeof input === "string") {
@@ -265,7 +320,9 @@ ipcMain.handle("codex:send", async (_evt, args) => {
   }
 
   const cwd = (row.cwd || "").toString().trim() || os.homedir();
-  const base = ["codex", "exec", "--json", "--skip-git-repo-check", "-C", cwd];
+  const codexPath = _bin("codex");
+  if (!codexPath) return { error: "codex not found (install Codex CLI or add it to PATH)" };
+  const base = [codexPath, "exec", "--json", "--skip-git-repo-check", "-C", cwd];
   if (mode === "auto") base.push("--full-auto");
   else base.push("-s", "read-only");
   const cmd = [...base, "resume", threadId, "-"];
@@ -274,6 +331,9 @@ ipcMain.handle("codex:send", async (_evt, args) => {
     const child = spawn(cmd[0], cmd.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("error", (e) => {
+      resolve({ error: `Failed to run Codex: ${String(e)}` });
+    });
     child.stdin.write(prompt);
     child.stdin.end();
     child.on("close", (code) => {
@@ -315,7 +375,9 @@ ipcMain.handle("codex:newThread", async (_evt, args) => {
   const title = (args?.title || "").toString().trim() || "New chat";
   const mode = (args?.mode || "manual").toString().toLowerCase();
 
-  const base = ["codex", "exec", "--json", "--skip-git-repo-check", "-C", cwd];
+  const codexPath = _bin("codex");
+  if (!codexPath) return { error: "codex not found (install Codex CLI or add it to PATH)" };
+  const base = [codexPath, "exec", "--json", "--skip-git-repo-check", "-C", cwd];
   if (mode === "auto") base.push("--full-auto");
   else base.push("-s", "read-only");
 
@@ -508,12 +570,17 @@ async function _ensureOpenCodeServerRunning() {
   }
 
   if (!_opencodeServerProc) {
+    const opencodePath = _bin("opencode");
+    if (!opencodePath) return false;
     try {
       _opencodeServerProc = spawn(
-        "opencode",
+        opencodePath,
         ["serve", "--port", "9090", "--hostname", "127.0.0.1"],
         { stdio: "ignore", detached: true }
       );
+      _opencodeServerProc.on("error", () => {
+        _opencodeServerProc = null;
+      });
       _opencodeServerProc.unref();
     } catch {
       _opencodeServerProc = null;
@@ -567,7 +634,7 @@ ipcMain.handle("opencode:send", async (_evt, args) => {
     const beforeT = Number(beforeRows[0]?.t || 0) || 0;
 
     const cmd = [
-      "opencode",
+      _bin("opencode") || "opencode",
       "run",
       "--format",
       "json",
@@ -617,10 +684,12 @@ ipcMain.handle("opencode:newSession", async (_evt, args) => {
 
   // Create a new session by running a minimal prompt (no --continue / --session).
   // Then query the DB for the newest session and return its id.
+  const opencodePath = _bin("opencode");
+  if (!opencodePath) return { error: "opencode not found (install OpenCode CLI or add it to PATH)" };
   try {
     await _runCmdCapture(
       [
-        "opencode",
+        opencodePath,
         "run",
         "--format",
         "json",
