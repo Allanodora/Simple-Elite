@@ -65,11 +65,7 @@ body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
 <div class="left">
   <div class="leftbar">
     <strong style="color:#eee;">Online</strong>
-    <select id="leftProvider">
-      <option value="chatgpt">ChatGPT</option>
-      <option value="claude">Claude</option>
-      <option value="gemini">Gemini</option>
-    </select>
+    <select id="leftProvider"></select>
     <div class="hint" id="leftHint"></div>
   </div>
   <div class="leftview" id="leftWebviewWrap"></div>
@@ -413,6 +409,14 @@ function _setRightHint(text) {
   rightHint.textContent = (text ?? '').toString();
 }
 
+// Basic webview diagnostics so “Add URL…” failures are obvious.
+rightWebviewEl.addEventListener('did-fail-load', (e) => {
+  _setRightHint(`Load failed (${e.errorCode}): ${e.errorDescription}`);
+});
+rightWebviewEl.addEventListener('dom-ready', () => {
+  // keep existing hint (usually the URL)
+});
+
 function _slugify(text) {
   return (text || '')
     .toString()
@@ -563,23 +567,73 @@ const leftProviderSel = document.getElementById('leftProvider');
 const leftWrap = document.getElementById('leftWebviewWrap');
 const leftHint = document.getElementById('leftHint');
 
-const LEFT_PROVIDERS = {
-  chatgpt: { label: 'ChatGPT', url: 'https://chatgpt.com', partition: 'persist:online-chatgpt' },
-  claude: { label: 'Claude', url: 'https://claude.ai', partition: 'persist:online-claude' },
-  gemini: { label: 'Gemini', url: 'https://gemini.google.com', partition: 'persist:online-gemini' },
-};
+function _loadLeftApps() {
+  const defaults = [
+    { id: 'chatgpt', label: 'ChatGPT', url: 'https://chatgpt.com' },
+    { id: 'claude', label: 'Claude', url: 'https://claude.ai' },
+    { id: 'gemini', label: 'Gemini', url: 'https://gemini.google.com' },
+  ];
+  try {
+    const raw = localStorage.getItem('simpleElite.leftApps');
+    const parsed = raw ? JSON.parse(raw) : null;
+    const saved = Array.isArray(parsed) ? parsed : [];
+    const cleaned = saved
+      .filter((a) => a && typeof a === 'object')
+      .map((a) => ({
+        id: (a.id || '').toString(),
+        label: (a.label || '').toString(),
+        url: (a.url || '').toString(),
+      }))
+      .filter((a) => a.id && a.label && a.url && (a.url.startsWith('http://') || a.url.startsWith('https://')));
+    return [...defaults, ...cleaned];
+  } catch {
+    return defaults;
+  }
+}
+
+function _saveLeftApps(apps) {
+  try {
+    const defaults = new Set(['chatgpt', 'claude', 'gemini']);
+    const savedOnly = (apps || []).filter((a) => !defaults.has(a.id)).map((a) => ({
+      id: a.id,
+      label: a.label,
+      url: a.url,
+    }));
+    localStorage.setItem('simpleElite.leftApps', JSON.stringify(savedOnly));
+  } catch {
+    // ignore
+  }
+}
+
+function _populateLeftSelect(apps, selectedId) {
+  leftProviderSel.innerHTML = '';
+  for (const app of apps) {
+    const opt = document.createElement('option');
+    opt.value = app.id;
+    opt.textContent = app.label;
+    opt.title = app.url;
+    leftProviderSel.appendChild(opt);
+  }
+  const addOpt = document.createElement('option');
+  addOpt.value = '__add__';
+  addOpt.textContent = 'Add URL…';
+  leftProviderSel.appendChild(addOpt);
+
+  if (selectedId && apps.some((a) => a.id === selectedId)) leftProviderSel.value = selectedId;
+  else leftProviderSel.value = apps[0]?.id || 'chatgpt';
+}
 
 function _setLeftHint(text) {
   leftHint.textContent = (text ?? '').toString();
 }
 
-function _mountLeftWebview(key) {
-  const cfg = LEFT_PROVIDERS[key] || LEFT_PROVIDERS.chatgpt;
+function _mountLeftWebview(app) {
+  const cfg = app || { id: 'chatgpt', url: 'https://chatgpt.com' };
   // Partition changes require a new <webview>, so rebuild each switch.
   leftWrap.innerHTML = '';
   const wv = document.createElement('webview');
   wv.setAttribute('src', cfg.url);
-  wv.setAttribute('partition', cfg.partition);
+  wv.setAttribute('partition', `persist:left-${_slugify(cfg.id || 'online')}`);
   wv.style.width = '100%';
   wv.style.height = '100%';
   wv.style.display = 'inline-flex';
@@ -587,20 +641,47 @@ function _mountLeftWebview(key) {
   _setLeftHint(cfg.url);
 }
 
-leftProviderSel.addEventListener('change', () => {
-  const key = leftProviderSel.value;
-  try { localStorage.setItem('simpleElite.leftProvider', key); } catch {}
-  _mountLeftWebview(key);
+leftProviderSel.addEventListener('change', async () => {
+  const apps = _loadLeftApps();
+  const v = leftProviderSel.value;
+
+  if (v === '__add__') {
+    const name = window.prompt('Name for this online app:', 'My Site');
+    if (!name) {
+      _populateLeftSelect(apps, (localStorage.getItem('simpleElite.leftProvider') || 'chatgpt'));
+      return;
+    }
+    const url = window.prompt('URL to load (must start with http:// or https://):', 'https://');
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      _addMessage('Add URL cancelled or invalid URL.', 'system');
+      _populateLeftSelect(apps, (localStorage.getItem('simpleElite.leftProvider') || 'chatgpt'));
+      return;
+    }
+
+    const id = `custom_${_slugify(name)}_${Date.now().toString(36)}`;
+    const next = [...apps, { id, label: name.trim(), url: url.trim() }];
+    _saveLeftApps(next);
+    try { localStorage.setItem('simpleElite.leftProvider', id); } catch {}
+    _populateLeftSelect(next, id);
+    _mountLeftWebview(next.find((a) => a.id === id));
+    return;
+  }
+
+  try { localStorage.setItem('simpleElite.leftProvider', v); } catch {}
+  const chosen = apps.find((a) => a.id === v) || apps[0];
+  _mountLeftWebview(chosen);
 });
 
 (() => {
+  const apps = _loadLeftApps();
   let key = 'chatgpt';
   try {
     const saved = localStorage.getItem('simpleElite.leftProvider');
-    if (saved && LEFT_PROVIDERS[saved]) key = saved;
+    if (saved && apps.some((a) => a.id === saved)) key = saved;
   } catch {}
-  leftProviderSel.value = key;
-  _mountLeftWebview(key);
+  _populateLeftSelect(apps, key);
+  const chosen = apps.find((a) => a.id === leftProviderSel.value) || apps[0];
+  _mountLeftWebview(chosen);
 })();
 </script>
 
