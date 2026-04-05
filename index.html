@@ -413,9 +413,78 @@ function _setRightHint(text) {
   rightHint.textContent = (text ?? '').toString();
 }
 
-async function _switchRightApp(value) {
+function _slugify(text) {
+  return (text || '')
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .slice(0, 40) || 'app';
+}
+
+function _loadRightApps() {
+  const defaults = [
+    { id: 'assistant', label: 'Built-in Assistant (Advanced)', kind: 'builtin' },
+    { id: 'opencode_web', label: 'OpenCode Web', kind: 'opencode_web' },
+  ];
+  try {
+    const raw = localStorage.getItem('simpleElite.rightApps');
+    const parsed = raw ? JSON.parse(raw) : null;
+    const saved = Array.isArray(parsed) ? parsed : [];
+    const cleaned = saved
+      .filter((a) => a && typeof a === 'object')
+      .map((a) => ({
+        id: (a.id || '').toString(),
+        label: (a.label || '').toString(),
+        kind: 'web',
+        url: (a.url || '').toString(),
+      }))
+      .filter((a) => a.id && a.label && a.url && (a.url.startsWith('http://') || a.url.startsWith('https://')));
+    return [...defaults, ...cleaned];
+  } catch {
+    return defaults;
+  }
+}
+
+function _saveRightApps(apps) {
+  try {
+    const savedOnly = (apps || []).filter((a) => a.kind === 'web').map((a) => ({
+      id: a.id,
+      label: a.label,
+      url: a.url,
+    }));
+    localStorage.setItem('simpleElite.rightApps', JSON.stringify(savedOnly));
+  } catch {
+    // ignore
+  }
+}
+
+function _populateRightAppSelect(apps, selectedId) {
+  rightAppSel.innerHTML = '';
+  for (const app of apps) {
+    const opt = document.createElement('option');
+    opt.value = app.id;
+    opt.textContent = app.label;
+    rightAppSel.appendChild(opt);
+  }
+  const addOpt = document.createElement('option');
+  addOpt.value = '__add__';
+  addOpt.textContent = 'Add URL…';
+  rightAppSel.appendChild(addOpt);
+
+  if (selectedId && apps.some((a) => a.id === selectedId)) {
+    rightAppSel.value = selectedId;
+  } else {
+    rightAppSel.value = apps[0]?.id || 'assistant';
+  }
+}
+
+async function _switchRightApp(value, apps) {
   const v = value || 'assistant';
-  if (v === 'opencode_web') {
+  const list = apps || _loadRightApps();
+  const chosen = list.find((a) => a.id === v) || list[0];
+
+  if (chosen?.kind === 'opencode_web') {
     rightBuiltIn.style.display = 'none';
     rightWebviewWrap.style.display = 'flex';
     _setRightHint('Starting OpenCode…');
@@ -432,26 +501,61 @@ async function _switchRightApp(value) {
     return;
   }
 
-  // default: built-in assistant
+  if (chosen?.kind === 'web') {
+    rightBuiltIn.style.display = 'none';
+    rightWebviewWrap.style.display = 'flex';
+    const url = chosen.url;
+    rightWebviewEl.setAttribute('partition', `persist:right-${_slugify(chosen.id)}`);
+    rightWebviewEl.setAttribute('src', url);
+    _setRightHint(url);
+    return;
+  }
+
+  // default: built-in assistant (advanced)
   rightWebviewWrap.style.display = 'none';
   rightBuiltIn.style.display = 'flex';
   _setRightHint('');
 }
 
 rightAppSel.addEventListener('change', async () => {
+  const apps = _loadRightApps();
   const v = rightAppSel.value;
+
+  if (v === '__add__') {
+    const name = window.prompt('Name for this app (shown in dropdown):', 'My App');
+    if (!name) {
+      _populateRightAppSelect(apps, (localStorage.getItem('simpleElite.rightApp') || 'assistant'));
+      return;
+    }
+    const url = window.prompt('URL to load (must start with http:// or https://):', 'http://127.0.0.1:3000');
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      _addMessage('Add URL cancelled or invalid URL.', 'system');
+      _populateRightAppSelect(apps, (localStorage.getItem('simpleElite.rightApp') || 'assistant'));
+      return;
+    }
+
+    const id = `custom_${_slugify(name)}_${Date.now().toString(36)}`;
+    const next = [...apps, { id, label: name.trim(), kind: 'web', url: url.trim() }];
+    _saveRightApps(next);
+    try { localStorage.setItem('simpleElite.rightApp', id); } catch {}
+    _populateRightAppSelect(next, id);
+    await _switchRightApp(id, next);
+    return;
+  }
+
   try { localStorage.setItem('simpleElite.rightApp', v); } catch {}
-  await _switchRightApp(v);
+  await _switchRightApp(v, apps);
 });
 
 (async () => {
+  const apps = _loadRightApps();
   let v = 'assistant';
   try {
     const saved = localStorage.getItem('simpleElite.rightApp');
     if (saved) v = saved;
   } catch {}
-  rightAppSel.value = v;
-  await _switchRightApp(v);
+  _populateRightAppSelect(apps, v);
+  await _switchRightApp(rightAppSel.value, apps);
 })();
 
 // ---- Left Online Provider (ChatGPT/Claude/Gemini) ----
