@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="node_modules/xterm/css/xterm.css">
 
 <style>
-body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
+body { margin:0; display:flex; height:100vh; background:transparent; color:#e5e5e5; }
 
 .left { flex:1; display:flex; flex-direction:column; min-width:0; }
 .leftbar { padding:8px 10px; border-bottom:1px solid #222; display:flex; gap:8px; align-items:center; background:#0b0b0b; flex:0 0 auto; }
@@ -78,7 +78,7 @@ body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
 
 <body>
 
-<div class="left">
+<div class="left zone">
   <div class="leftbar">
     <strong style="color:#eee;">Online</strong>
     <select id="leftProvider"></select>
@@ -87,7 +87,7 @@ body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
   <div class="leftview" id="leftWebviewWrap"></div>
 </div>
 
-<div class="right">
+<div class="right zone">
 
   <div class="rightapp">
     <strong style="color:#eee;">Right</strong>
@@ -138,6 +138,7 @@ body { margin:0; display:flex; height:100vh; background:#000; color:#e5e5e5; }
 </div>
 
 <script src="node_modules/xterm/lib/xterm.js"></script>
+<script src="starry_simple_elite.js"></script>
 
 <script>
 const term = new Terminal({
