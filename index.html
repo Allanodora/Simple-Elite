@@ -127,9 +127,7 @@ body { margin:0; display:flex; height:100vh; background:transparent; color:#e5e5
   </div>
   </div>
 
-  <div class="rightview" id="rightWebview" style="display:none;">
-    <webview id="rightWebviewEl" src="about:blank" partition="persist:right-app" allowpopups></webview>
-  </div>
+  <div class="rightview" id="rightWebview" style="display:none;"></div>
 
   <div class="resizer" id="resizer"></div>
 
@@ -469,20 +467,29 @@ inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(
 const rightAppSel = document.getElementById('rightApp');
 const rightBuiltIn = document.getElementById('rightBuiltIn');
 const rightWebviewWrap = document.getElementById('rightWebview');
-const rightWebviewEl = document.getElementById('rightWebviewEl');
 const rightHint = document.getElementById('rightHint');
 
 function _setRightHint(text) {
   rightHint.textContent = (text ?? '').toString();
 }
 
-// Basic webview diagnostics so “Add URL…” failures are obvious.
-rightWebviewEl.addEventListener('did-fail-load', (e) => {
-  _setRightHint(`Load failed (${e.errorCode}): ${e.errorDescription}`);
-});
-rightWebviewEl.addEventListener('dom-ready', () => {
-  // keep existing hint (usually the URL)
-});
+function _mountRightWebview({ url, partition, allowPopups }) {
+  rightWebviewWrap.innerHTML = '';
+  const wv = document.createElement('webview');
+  wv.style.width = '100%';
+  wv.style.height = '100%';
+  wv.style.display = 'inline-flex';
+  if (partition) wv.setAttribute('partition', partition);
+  if (allowPopups) wv.setAttribute('allowpopups', '');
+  wv.setAttribute('src', url || 'about:blank');
+
+  // Diagnostics so failures are obvious.
+  wv.addEventListener('did-fail-load', (e) => {
+    _setRightHint(`Load failed (${e.errorCode}): ${e.errorDescription}`);
+  });
+
+  rightWebviewWrap.appendChild(wv);
+}
 
 function _slugify(text) {
   return (text || '')
@@ -566,8 +573,7 @@ async function _switchRightApp(value, apps) {
       return;
     }
     const url = res?.url || 'http://127.0.0.1:9090/';
-    rightWebviewEl.setAttribute('partition', 'persist:right-opencode');
-    rightWebviewEl.setAttribute('src', url);
+    _mountRightWebview({ url, partition: 'persist:right-opencode', allowPopups: true });
     _setRightHint(url);
     return;
   }
@@ -576,8 +582,7 @@ async function _switchRightApp(value, apps) {
     rightBuiltIn.style.display = 'none';
     rightWebviewWrap.style.display = 'flex';
     const url = chosen.url;
-    rightWebviewEl.setAttribute('partition', `persist:right-${_slugify(chosen.id)}`);
-    rightWebviewEl.setAttribute('src', url);
+    _mountRightWebview({ url, partition: `persist:right-${_slugify(chosen.id)}`, allowPopups: true });
     _setRightHint(url);
     return;
   }

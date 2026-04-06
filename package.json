@@ -32,6 +32,7 @@
       "main.js",
       "preload.js",
       "panel.html",
+      "starry_simple_elite.js",
       "node_modules/**"
     ],
     "mac": {
